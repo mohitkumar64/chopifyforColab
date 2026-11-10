@@ -1,6 +1,7 @@
 # local environment & large artifacts -- never commit
 .venv/
 venv/
+
 whisper.cpp/
 whisper_old/
 work/
@@ -12,9 +13,12 @@ __pycache__/
 *.sh
 !install.sh
 
-# chopify outputs
+# chopify outputs & local user secrets
 clips/
 projects/
+videos/
+cookies.txt
+*.cookie*
 _site/
 .pytest_cache/
 

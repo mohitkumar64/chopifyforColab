@@ -750,6 +750,7 @@ $("#settings-form").addEventListener(
     delete values.center1;
     delete values.center2;
     values.llm = values.llm.trim() || null;
+    values.llm_provider = (values.llm_provider || "").trim() || null;
     values.search = null;
     values.semantic = null;
     const mode = $("#search-mode").value;
@@ -1053,14 +1054,276 @@ setInterval(async () => {
         }
       }
     }
-    $("#connection").textContent = "● Local session";
+    $("#connection").textContent = "● Active session";
   } catch (error) {
     $("#connection").textContent = "Connection lost · restart Studio";
   } finally {
     polling = false;
   }
 }, 2000);
+
+// --- API & LLM Config Modal ---
+function updateApiModalStatus(cfg) {
+  if (!cfg) return;
+  const provSelect = $("#modal-llm-provider");
+  if (provSelect) provSelect.value = cfg.llm_provider || "gemini";
+  if ($("#modal-gemini-model")) $("#modal-gemini-model").value = cfg.gemini_model || "";
+  if ($("#modal-nvidia-url")) $("#modal-nvidia-url").value = cfg.nvidia_base_url || "";
+  if ($("#modal-nvidia-model")) $("#modal-nvidia-model").value = cfg.nvidia_model || "";
+  if ($("#modal-ollama-host")) $("#modal-ollama-host").value = cfg.ollama_host || "";
+  if ($("#modal-ollama-model")) $("#modal-ollama-model").value = cfg.ollama_model || "";
+
+  const geminiStatus = $("#gemini-key-status");
+  if (geminiStatus) {
+    if (cfg.gemini_api_key_set) {
+      geminiStatus.textContent = "✓ API Key configured in .env";
+      geminiStatus.classList.add("configured");
+    } else {
+      geminiStatus.textContent = "No key configured (heuristic fallback if active)";
+      geminiStatus.classList.remove("configured");
+    }
+  }
+
+  const nvidiaStatus = $("#nvidia-key-status");
+  if (nvidiaStatus) {
+    if (cfg.nvidia_api_key_set) {
+      nvidiaStatus.textContent = "✓ API Key configured in .env";
+      nvidiaStatus.classList.add("configured");
+    } else {
+      nvidiaStatus.textContent = "No key configured (heuristic fallback if active)";
+      nvidiaStatus.classList.remove("configured");
+    }
+  }
+}
+
+async function openApiModal() {
+  try {
+    const cfg = await api("/api/llm-config");
+    updateApiModalStatus(cfg);
+  } catch (err) {
+    if (state.config && state.config.llm_config) {
+      updateApiModalStatus(state.config.llm_config);
+    }
+  }
+  const modal = $("#api-modal");
+  if (modal) modal.hidden = false;
+}
+
+function closeApiModal() {
+  const modal = $("#api-modal");
+  if (modal) modal.hidden = true;
+  if ($("#modal-gemini-key")) $("#modal-gemini-key").value = "";
+  if ($("#modal-nvidia-key")) $("#modal-nvidia-key").value = "";
+}
+
+for (const id of ["open-api-modal", "open-api-modal-rail", "open-api-modal-settings"]) {
+  const btn = $(`#${id}`);
+  if (btn) btn.addEventListener("click", openApiModal);
+}
+for (const id of ["close-api-modal", "cancel-api-modal"]) {
+  const btn = $(`#${id}`);
+  if (btn) btn.addEventListener("click", closeApiModal);
+}
+const apiModal = $("#api-modal");
+if (apiModal) {
+  apiModal.addEventListener("click", (e) => {
+    if (e.target === apiModal) closeApiModal();
+  });
+}
+
+document.querySelectorAll(".btn-toggle-vis").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const target = $(`#${btn.dataset.target}`);
+    if (target) {
+      target.type = target.type === "password" ? "text" : "password";
+      btn.textContent = target.type === "password" ? "👁️" : "🙈";
+    }
+  });
+});
+
+const apiForm = $("#api-keys-form");
+if (apiForm) {
+  apiForm.addEventListener(
+    "submit",
+    safe(async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.target));
+      const payload = {};
+      for (const [k, v] of Object.entries(data)) {
+        const trimmed = (v || "").trim();
+        if (k.endsWith("_key") && !trimmed) continue;
+        if (trimmed) payload[k] = trimmed;
+      }
+      payload.llm_provider = data.llm_provider;
+      const res = await api("/api/llm-config", payload);
+      notice("LLM & API configuration saved to .env!");
+      if (res.config) {
+        if (state.config) state.config.llm_config = res.config;
+        updateApiModalStatus(res.config);
+      }
+      closeApiModal();
+    }),
+  );
+}
+
+// --- Available Videos in /content/videos ---
+async function fetchAvailableVideos() {
+  const container = $("#available-videos-container");
+  if (!container) return;
+  try {
+    const res = await api("/api/available-videos");
+    if ($("#videos-dir-label")) $("#videos-dir-label").textContent = res.directory || "/content/videos";
+    if (!res.videos || res.videos.length === 0) {
+      container.innerHTML = `<p class="muted">No video files in ${escapeHTML(res.directory || "/content/videos")} yet. Downloaded videos will be saved here automatically.</p>`;
+      return;
+    }
+    container.innerHTML = res.videos
+      .map(
+        (v) => `
+        <div class="video-item-card">
+          <div class="video-item-info">
+            <span class="video-item-name" title="${escapeHTML(v.name)}">${escapeHTML(v.name)} <span class="muted">(${v.size_mb} MB)</span></span>
+            <span class="video-item-path" title="${escapeHTML(v.path)}">${escapeHTML(v.path)}</span>
+          </div>
+          <div class="video-item-actions">
+            <button type="button" class="copy-path-btn" data-path="${escapeHTML(v.path)}">📋 Copy Path</button>
+            <button type="button" class="use-video-btn" data-path="${escapeHTML(v.path)}">＋ Add</button>
+          </div>
+        </div>
+      `,
+      )
+      .join("");
+  } catch (err) {
+    container.innerHTML = `<p class="muted">Could not scan videos: ${escapeHTML(err.message)}</p>`;
+  }
+}
+
+// Delegate copy and use clicks
+const availableVideosContainer = $("#available-videos-container");
+if (availableVideosContainer) {
+  availableVideosContainer.addEventListener("click", async (e) => {
+    const copyBtn = e.target.closest(".copy-path-btn");
+    if (copyBtn) {
+      const path = copyBtn.dataset.path;
+      try {
+        await navigator.clipboard.writeText(path);
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = "✓ Copied!";
+        setTimeout(() => {
+          copyBtn.textContent = originalText;
+        }, 2000);
+        notice(`Copied to clipboard: ${path}`);
+      } catch (err) {
+        prompt("Copy this video path:", path);
+      }
+      return;
+    }
+
+    const useBtn = e.target.closest(".use-video-btn");
+    if (useBtn) {
+      const path = useBtn.dataset.path;
+      const sourcesArea = $("#sources");
+      if (sourcesArea) {
+        const cur = sourcesArea.value.trim();
+        sourcesArea.value = cur ? `${cur}\n${path}` : path;
+        notice(`Added video to project sources: ${path}`);
+        sourcesArea.focus();
+      }
+    }
+  });
+}
+
+const refreshVideosBtn = $("#refresh-available-videos");
+if (refreshVideosBtn) {
+  refreshVideosBtn.addEventListener(
+    "click",
+    safe(async () => {
+      await fetchAvailableVideos();
+      notice("Refreshed available videos list.");
+    }),
+  );
+}
+
+// --- Cookies (cookies.txt) management ---
+async function fetchCookiesStatus() {
+  const badge = $("#colab-cookies-badge");
+  const indicator = $("#cookies-status-indicator");
+  try {
+    const res = await api("/api/cookies");
+    if (badge) {
+      if (res.exists) {
+        badge.textContent = `🍪 Cookies: Active`;
+        badge.classList.add("active");
+        badge.title = `cookies.txt active at ${res.path} (${res.size_bytes} bytes)`;
+      } else {
+        badge.textContent = `🍪 Cookies: Not set`;
+        badge.classList.remove("active");
+        badge.title = "No cookies.txt found. Click to add for Colab.";
+      }
+    }
+    if (indicator) {
+      if (res.exists) {
+        indicator.textContent = `✓ cookies.txt active at ${res.path} (${res.size_bytes} bytes)`;
+        indicator.classList.add("configured");
+      } else {
+        indicator.textContent = `No cookies.txt active. Upload or paste below to enable authenticated yt-dlp in Colab.`;
+        indicator.classList.remove("configured");
+      }
+    }
+  } catch (err) {
+    if (badge) badge.textContent = "🍪 Cookies: Status error";
+  }
+}
+
+const colabCookiesBadge = $("#colab-cookies-badge");
+if (colabCookiesBadge) {
+  colabCookiesBadge.addEventListener("click", () => {
+    openApiModal();
+  });
+}
+
+const btnUploadCookies = $("#btn-upload-cookies");
+if (btnUploadCookies) {
+  btnUploadCookies.addEventListener(
+    "click",
+    safe(async () => {
+      const fileInput = $("#modal-cookies-file");
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        throw new Error("Select a cookies.txt file first.");
+      }
+      const file = fileInput.files[0];
+      const content = await file.text();
+      const res = await api("/api/cookies", { content });
+      notice(`cookies.txt saved to root/Colab (${res.path || "saved"})!`);
+      fileInput.value = "";
+      await fetchCookiesStatus();
+    }),
+  );
+}
+
+const btnSaveCookiesText = $("#btn-save-cookies-text");
+if (btnSaveCookiesText) {
+  btnSaveCookiesText.addEventListener(
+    "click",
+    safe(async () => {
+      const textArea = $("#modal-cookies-text");
+      if (!textArea || !textArea.value.trim()) {
+        throw new Error("Paste cookies.txt content first.");
+      }
+      const res = await api("/api/cookies", { content: textArea.value.trim() });
+      notice(`cookies.txt saved to root/Colab (${res.path || "saved"})!`);
+      textArea.value = "";
+      await fetchCookiesStatus();
+    }),
+  );
+}
+
 safe(async () => {
   await config();
+  if (state.config && state.config.llm_config) {
+    updateApiModalStatus(state.config.llm_config);
+  }
+  await fetchCookiesStatus();
+  await fetchAvailableVideos();
   await refreshProjects();
 })();

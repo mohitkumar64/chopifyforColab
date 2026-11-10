@@ -21,7 +21,7 @@ DEFAULT_OPTIONS = {"aspect": "16:9", "style": "default", "tighten": False,
                    "loudnorm": False, "whisper_model": "medium", "device": "cpu",
                    "min_len": 15, "max_len": 300, "max_clips": None,
                    "min_score": 8.0, "preferred_len": None,
-                   "llm": None, "search": None, "semantic": None,
+                   "llm": None, "llm_provider": None, "search": None, "semantic": None,
                    "embed_model": "nomic-embed-text", "brand": None,
                    "layout": "single", "centers": [0.25, 0.75], "caption": None}
 
@@ -85,9 +85,14 @@ def validate_options(options):
     if not isinstance(centers, (list, tuple)) or len(centers) != 2 or any(
             not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1 for v in centers):
         raise ValueError("Provide two speaker centers between 0 and 1.")
-    for key in ("whisper_model", "embed_model", "llm", "search", "semantic", "brand"):
+    for key in ("whisper_model", "embed_model", "llm", "llm_provider", "search", "semantic", "brand"):
         if result[key] is not None and (not isinstance(result[key], str) or len(result[key]) > 2000):
             raise ValueError(f"{key} must be text.")
+    if result["llm_provider"] is not None:
+        val = result["llm_provider"].strip().lower()
+        if val not in {"", "gemini", "nvidia", "ollama", "heuristic"}:
+            raise ValueError("llm_provider must be gemini, nvidia, ollama, heuristic, or null.")
+        result["llm_provider"] = val or None
     for key in ("tighten", "loudnorm"):
         if not isinstance(result[key], bool):
             raise ValueError(f"{key} must be true or false.")
@@ -97,7 +102,7 @@ def validate_options(options):
 
 
 def score_options(options):
-    keys = ("llm", "search", "semantic", "embed_model", "min_score",
+    keys = ("llm", "llm_provider", "search", "semantic", "embed_model", "min_score",
             "max_clips", "min_len", "max_len", "preferred_len")
     return {key: options[key] for key in keys}
 
@@ -111,7 +116,7 @@ def score_keys(transcript_key, data, options):
                             evidence.EVIDENCE_VERSION,
                             visual.FEATURE_VERSION])
     selection_options = {key: options[key] for key in (
-        "min_score", "max_clips", "llm")}
+        "min_score", "max_clips", "llm", "llm_provider")}
     selection_key = digest([discovery_key, selection_options])
     return discovery_key, selection_key
 
@@ -376,7 +381,9 @@ def run_project(path, action="all", preview=False, pick=None, resume=True, progr
                         path,
                         min_score=options["min_score"] if options["min_score"] is not None else 8.0,
                         max_clips=options["max_clips"],
-                        preferred_len=options["preferred_len"], llm=options["llm"])
+                        preferred_len=options["preferred_len"],
+                        llm=options["llm"],
+                        llm_provider=options.get("llm_provider"))
                     state["cache"]["selection"] = selection_key
                     save_project(path, state)
 

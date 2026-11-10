@@ -4,3 +4,8 @@ faster-whisper
 opencv-python
 numpy
 # Captions are burnt in via ffmpeg's ASS engine (no extra package needed).
+
+# Optional LLM providers & environment
+google-genai
+openai
+python-dotenv

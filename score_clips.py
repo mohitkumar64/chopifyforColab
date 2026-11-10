@@ -25,6 +25,7 @@ No paid APIs, no API keys. Usage:
 import re
 import math
 import json
+import os
 import bisect
 import hashlib
 import argparse
@@ -33,6 +34,7 @@ from pathlib import Path
 
 import evidence
 import visual
+import llm_provider
 
 OLLAMA_HOST = "http://localhost:11434"
 
@@ -1348,6 +1350,25 @@ def ollama_rerank(candidates, model, host=OLLAMA_HOST, timeout=120):
     return updated
 
 
+def llm_rerank(candidates, model=None, provider=None, host=OLLAMA_HOST, timeout=120):
+    """Rerank candidates using the specified LLM provider (gemini, nvidia, ollama).
+
+    Returns (updated_candidates, mode). Falls back to (None, 'heuristic') on error.
+    """
+    resolved = (provider or os.environ.get("LLM_PROVIDER") or ("ollama" if model else None))
+    if not resolved:
+        return None, "heuristic"
+    resolved = resolved.strip().lower()
+    if resolved == "heuristic":
+        return None, "heuristic"
+    if resolved == "ollama":
+        adjusted = ollama_rerank(candidates, model or "qwen2.5:7b", host=host, timeout=timeout)
+        if adjusted is not None:
+            return adjusted, "ollama"
+        return None, "heuristic"
+    return llm_provider.rerank(candidates, model=model, provider=resolved, host=host, timeout=timeout)
+
+
 def _nearest(values, t):
     lo, hi = 0, len(values) - 1
     best = 0
@@ -1575,8 +1596,25 @@ def discover(workdir, min_len=15, max_len=300, preferred_len=None,
     return candidates, stats
 
 
+def _resolve_provider(llm, llm_provider):
+    if llm_provider:
+        return llm_provider.strip().lower()
+    if llm:
+        val = str(llm).strip().lower()
+        if val.startswith("gemini"):
+            return "gemini"
+        if val.startswith("meta/") or "nvidia" in val:
+            return "nvidia"
+        return "ollama"
+    env_p = os.environ.get("LLM_PROVIDER")
+    if env_p:
+        return env_p.strip().lower()
+    return None
+
+
 def select(workdir, min_score=8.0, max_clips=None, preferred_len=None,
-           band=None, llm=None, host=OLLAMA_HOST, mode="heuristic"):
+           band=None, llm=None, host=OLLAMA_HOST, mode="heuristic",
+           llm_provider=None):
     """Read candidates.json, write segments.json and selection.json."""
     workdir = Path(workdir)
     candidates, discovery = load_candidates(workdir)
@@ -1585,15 +1623,20 @@ def select(workdir, min_score=8.0, max_clips=None, preferred_len=None,
         if band is None else band)
     deduped = dedupe_candidates(candidates, preferred_len=preferred_len,
                                 band=effective_band, min_score=min_score)
-    if llm:
-        adjusted = ollama_rerank(deduped[:50], llm, host)
+
+    active_provider = _resolve_provider(llm, llm_provider)
+    if active_provider and active_provider.lower() == "heuristic":
+        active_provider = None
+
+    if active_provider:
+        adjusted, used_mode = llm_rerank(deduped[:50], model=llm, provider=active_provider, host=host)
         if adjusted is not None:
             by_key = {_candidate_key(item): item for item in adjusted}
             candidates = [{**item, **by_key[_candidate_key(item)]}
                           if _candidate_key(item) in by_key else item
                           for item in candidates]
             deduped = [by_key.get(_candidate_key(item), item) for item in deduped]
-            mode = "ollama"
+            mode = used_mode
             save_candidates(workdir, candidates, discovery, mode=mode)
 
     segments, stats = select_candidates(
@@ -1640,10 +1683,11 @@ def _no_clips_message(workdir, threshold):
 
 def run(workdir, llm=None, host=OLLAMA_HOST, min_score=None, max_clips=None,
         min_len=15, max_len=300, search=None, pick=None, semantic=None,
-        embed_model="nomic-embed-text", preferred_len=None, explain=False):
+        embed_model="nomic-embed-text", preferred_len=None, explain=False,
+        llm_provider=None):
     """Score the transcript in workdir and write the discovery artifacts.
 
-    Returns (segments, mode): 'ollama', 'heuristic', or 'semantic'.
+    Returns (segments, mode): 'ollama', 'gemini', 'nvidia', 'heuristic', or 'semantic'.
     search='keywords' overrides scoring with keyword-search clip finding;
     pick='1,3,5' keeps only the numbered candidates (review workflow).
     """
@@ -1652,8 +1696,8 @@ def run(workdir, llm=None, host=OLLAMA_HOST, min_score=None, max_clips=None,
         preferred_len = parse_duration(preferred_len)
     effective_score = 8.0 if min_score is None else min_score
     mode = "heuristic"
-    if llm and (search or semantic):
-        print("Ollama reranking is ignored for search results.", flush=True)
+    if (llm or llm_provider) and (search or semantic):
+        print("LLM reranking is ignored for search results.", flush=True)
 
     if semantic:
         data = load_transcript(workdir)
@@ -1697,7 +1741,8 @@ def run(workdir, llm=None, host=OLLAMA_HOST, min_score=None, max_clips=None,
         segments, mode = select(workdir, min_score=effective_score,
                                 max_clips=max_clips,
                                 preferred_len=preferred_len,
-                                llm=llm, host=host)
+                                llm=llm, host=host,
+                                llm_provider=llm_provider)
 
     if not segments:
         _no_clips_message(workdir, effective_score)
@@ -1720,7 +1765,9 @@ def main():
     ap = argparse.ArgumentParser(description="Score a chopify transcript for virality.")
     ap.add_argument("workdir", nargs="?", default="work")
     ap.add_argument("--llm", nargs="?", const="qwen2.5:7b", default=None, metavar="MODEL",
-                    help="score with a local Ollama model (e.g. qwen2.5:7b, llama3.1:8b)")
+                    help="score with an LLM model (e.g. qwen2.5:7b, gemini-3.8-flash, meta/llama-3.3-70b-instruct)")
+    ap.add_argument("--llm-provider", choices=["gemini", "nvidia", "ollama", "heuristic"], default=None,
+                    help="LLM provider: gemini, nvidia, ollama, or heuristic (default from env LLM_PROVIDER)")
     ap.add_argument("--host", default=OLLAMA_HOST,
                     help="Ollama host (default http://localhost:11434)")
     ap.add_argument("--min-score", type=float, default=None,
@@ -1745,7 +1792,8 @@ def main():
     run(args.workdir, args.llm, args.host, args.min_score, args.max_clips,
         args.min_len, args.max_len, search=args.search, pick=args.clips,
         semantic=args.semantic, embed_model=args.embed_model,
-        preferred_len=args.preferred_len, explain=args.explain)
+        preferred_len=args.preferred_len, explain=args.explain,
+        llm_provider=args.llm_provider)
     print("SCORING COMPLETE", flush=True)
 
 

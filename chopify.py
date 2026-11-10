@@ -25,6 +25,7 @@ from pathlib import Path
 
 CHOPIFY_VERSION = "1.4.0"
 
+import llm_provider
 import render_clips
 import score_clips
 
@@ -193,7 +194,16 @@ def main():
                     help="normalize audio to -14 LUFS (platform standard)")
     ap.add_argument("--llm", nargs="?", const="qwen2.5:7b", default=None,
                     metavar="MODEL",
-                    help="pick clips with a local Ollama model (e.g. qwen2.5:7b)")
+                    help="pick clips with an LLM model (e.g. qwen2.5:7b, gemini-3.8-flash, meta/llama-3.3-70b-instruct)")
+    ap.add_argument("--llm-provider", choices=["gemini", "nvidia", "ollama", "heuristic"], default=None,
+                    help="LLM provider: gemini, nvidia, ollama, or heuristic (default from env LLM_PROVIDER)")
+    ap.add_argument("--tunnel", "--cloudflare", action="store_true",
+                    help="launch Studio dashboard with a public Cloudflare Tunnel")
+    ap.add_argument("--dashboard", action="store_true",
+                    help="launch Studio browser dashboard")
+    ap.add_argument("--host", default="0.0.0.0", help="host interface for dashboard (default: 0.0.0.0)")
+    ap.add_argument("--port", type=int, default=8765, help="port for dashboard (default: 8765)")
+    ap.add_argument("--no-browser", action="store_true", help="do not auto-open browser for dashboard")
     ap.add_argument("--search", default=None, metavar="KEYWORDS",
                     help="skip virality scoring: clip around transcript sentences "
                          "containing ALL keywords (e.g. --search \"pricing\")")
@@ -239,6 +249,22 @@ def main():
         for name in render_clips.CAPTION_STYLES:
             print(name)
         return
+    if args.dashboard or args.tunnel or args.url in {"dashboard", "tunnel"}:
+        import dashboard
+        dash_args = []
+        if args.tunnel or args.url == "tunnel":
+            dash_args.append("--tunnel")
+        if args.projects_dir:
+            dash_args.extend(["--projects-dir", args.projects_dir])
+        if args.host:
+            dash_args.extend(["--host", args.host])
+        if args.port:
+            dash_args.extend(["--port", str(args.port)])
+        if args.no_browser:
+            dash_args.append("--no-browser")
+        sys.argv = [sys.argv[0]] + dash_args
+        dashboard.main()
+        return
     if not (args.url or args.batch or args.project):
         ap.error("provide a local video, URL, --batch file, or --project directory")
     if args.batch and (args.url or args.project):
@@ -266,6 +292,27 @@ def main():
         options["min_score"] = 8.0
     if options["brand"]:
         options["brand"] = str(Path(options["brand"]).resolve())
+
+    if args.llm_provider:
+        options["llm_provider"] = args.llm_provider
+        if args.llm_provider == "gemini" and not options.get("llm"):
+            options["llm"] = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+        elif args.llm_provider == "nvidia" and not options.get("llm"):
+            options["llm"] = os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
+        elif args.llm_provider == "ollama" and not options.get("llm"):
+            options["llm"] = "qwen2.5:7b"
+    elif options.get("llm"):
+        options["llm_provider"] = os.environ.get("LLM_PROVIDER", "ollama")
+    elif os.environ.get("LLM_PROVIDER"):
+        env_prov = os.environ.get("LLM_PROVIDER").strip().lower()
+        if env_prov in {"gemini", "nvidia", "ollama", "heuristic"}:
+            options["llm_provider"] = env_prov
+            if env_prov == "gemini":
+                options["llm"] = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+            elif env_prov == "nvidia":
+                options["llm"] = os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
+            elif env_prov == "ollama":
+                options["llm"] = "qwen2.5:7b"
     interactive = (
         not args.no_input and not args.batch and args.action != "render"
         and not args.search and not args.semantic and sys.stdin.isatty()

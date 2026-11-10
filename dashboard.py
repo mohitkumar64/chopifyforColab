@@ -1,4 +1,4 @@
-"""Chopify Studio: loopback browser UI with a serial, resumable project queue."""
+"""Chopify Studio: browser UI with a serial, resumable project queue and remote access."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -7,18 +7,61 @@ import mimetypes
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import unquote, urlsplit
 import webbrowser
 
 import branding
+import colab_utils
+import llm_provider
 import projects
 import render_clips
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "assets" / "studio"
+
+
+def start_cloudflare_tunnel(port):
+    """Launch a Cloudflare Tunnel pointing to the local port and extract its public URL."""
+    binary = shutil.which("cloudflared") or shutil.which("cloudflare")
+    if not binary:
+        raise RuntimeError(
+            "Cloudflare Tunnel (cloudflared) is not installed.\n"
+            "Please install it from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/\n"
+            "or run Chopify Studio without --tunnel."
+        )
+    cmd = [binary, "tunnel", "--url", f"http://127.0.0.1:{port}"]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    tunnel_url = None
+    pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+    start = time.time()
+    while time.time() - start < 15:
+        if proc.poll() is not None:
+            err = proc.stderr.read() if proc.stderr else ""
+            raise RuntimeError(f"Cloudflare Tunnel exited unexpectedly:\n{err}")
+        line = proc.stderr.readline()
+        if line:
+            m = pattern.search(line)
+            if m:
+                tunnel_url = m.group(0)
+                break
+        time.sleep(0.1)
+
+    if not tunnel_url:
+        proc.terminate()
+        raise RuntimeError("Cloudflare Tunnel started but could not detect a trycloudflare.com URL within 15 seconds.")
+
+    return proc, tunnel_url
 
 
 def project_detail(root, project_id):
@@ -167,14 +210,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def valid_host(self):
-        return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
+        # Allow connections from any IP, LAN address, or Cloudflare Tunnel host
+        return True
 
     def do_GET(self):
-        if not self.valid_host():
-            return self.send_json({"error": "Use the 127.0.0.1 Studio address."}, 403)
         try:
             parts = unquote(urlsplit(self.path).path).strip("/").split("/")
+            if parts == ["api", "available-videos"]:
+                return self.send_json(colab_utils.list_available_videos())
+            if parts == ["api", "cookies"]:
+                cpath = colab_utils.find_cookies_path()
+                return self.send_json({
+                    "exists": bool(cpath),
+                    "path": str(cpath) if cpath else None,
+                    "size_bytes": cpath.stat().st_size if cpath else 0,
+                })
+            if parts == ["api", "llm-config"]:
+                return self.send_json(llm_provider.get_llm_config())
             if parts == ["api", "config"]:
+                cpath = colab_utils.find_cookies_path()
                 brands = sorted(p.stem for p in (self.app.root / "brands").glob("*.json"))
                 caption_brands = {}
                 for brand_path in (self.app.root / "brands").glob("*.json"):
@@ -190,6 +244,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({
                     "token": self.app.token,
                     "defaults": projects.DEFAULT_OPTIONS,
+                    "llm_config": llm_provider.get_llm_config(),
+                    "cookies": {
+                        "exists": bool(cpath),
+                        "path": str(cpath) if cpath else None,
+                        "size_bytes": cpath.stat().st_size if cpath else 0,
+                    },
+                    "videos_dir": str(colab_utils.get_videos_dir()),
                     "brands": brands,
                     "caption_brands": caption_brands,
                     "caption_presets": render_clips.CAPTION_STYLES,
@@ -235,10 +296,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         origin = self.headers.get("Origin")
-        expected = f"http://127.0.0.1:{self.server.server_port}"
-        if (not self.valid_host() or (origin is not None and origin != expected)
-                or not secrets.compare_digest(self.headers.get("X-Chopify-Token", ""), self.app.token)):
+        token = self.headers.get("X-Chopify-Token", "")
+        if not secrets.compare_digest(token, self.app.token):
             return self.send_json({"error": "Request rejected. Reload Studio and retry."}, 403)
+        if origin is not None:
+            origin_netloc = urlsplit(origin).netloc
+            host = self.headers.get("Host")
+            if origin_netloc and host and origin_netloc != host:
+                return self.send_json({"error": "Cross-origin request rejected."}, 403)
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 10_000_000:
@@ -248,6 +313,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Expected a JSON object.")
             parts = unquote(urlsplit(self.path).path).strip("/").split("/")
             with self.app.lock:
+                if parts == ["api", "cookies"]:
+                    content = body.get("content", "")
+                    saved_path = colab_utils.save_cookies_file(content)
+                    return self.send_json({"ok": True, "path": saved_path})
+                if parts == ["api", "llm-config"]:
+                    updated = llm_provider.save_llm_config(body)
+                    return self.send_json({"ok": True, "config": updated})
                 if parts == ["api", "projects"]:
                     return self.send_json(projects.create_project(self.app.root, body["source"], body.get("options", {})), 201)
                 if parts == ["api", "batch"]:
@@ -337,28 +409,48 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
-def make_server(root="projects", port=8765):
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def make_server(root="projects", port=8765, host="0.0.0.0"):
+    server = ThreadingHTTPServer((host, port), Handler)
     server.app = Studio(root)
     return server
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Open Chopify Studio on your own computer.")
+    parser = argparse.ArgumentParser(description="Open Chopify Studio.")
     parser.add_argument("--projects-dir", default="projects")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--tunnel", "--cloudflare", action="store_true",
+                        help="Auto-create a public Cloudflare Tunnel and print the remote URL")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
-    server = make_server(args.projects_dir, args.port)
-    url = f"http://127.0.0.1:{server.server_port}"
-    print(f"Chopify Studio: {url}\nProjects: {server.app.root}\nPress Ctrl+C to stop.", flush=True)
+    server = make_server(args.projects_dir, args.port, host=args.host)
+    local_url = f"http://127.0.0.1:{server.server_port}"
+    print(f"Chopify Studio: {local_url} (accessible from any IP on port {server.server_port})\nProjects: {server.app.root}\nPress Ctrl+C to stop.", flush=True)
+
+    tunnel_proc = None
+    if args.tunnel:
+        try:
+            tunnel_proc, tunnel_url = start_cloudflare_tunnel(server.server_port)
+            print(f"\n=======================================================", flush=True)
+            print(f"🚀 Cloudflare Tunnel Active!", flush=True)
+            print(f"🌐 Remote Studio URL: {tunnel_url}", flush=True)
+            print(f"=======================================================\n", flush=True)
+        except RuntimeError as exc:
+            print(f"\n❌ Error: {exc}\n", file=sys.stderr, flush=True)
+            server.app.close()
+            server.server_close()
+            sys.exit(1)
+
     if not args.no_browser:
-        webbrowser.open(url)
+        webbrowser.open(local_url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        if tunnel_proc:
+            tunnel_proc.terminate()
         server.app.close()
         server.server_close()
 

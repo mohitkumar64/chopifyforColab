@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+import colab_utils
+
 LONG_SECONDS = 2 * 60 * 60
 LONG_BYTES = 8 * 1024**3
 AUDIO_EXTS = {".m4a", ".mp3", ".opus", ".ogg", ".wav", ".aac", ".flac", ".webm"}
@@ -135,7 +137,7 @@ def _probe_url(url, run=None):
     try:
         result = run([
             sys.executable, "-m", "yt_dlp", "--dump-single-json",
-            "--skip-download", "--no-playlist", url])
+            "--skip-download", "--no-playlist", *colab_utils.yt_dlp_cookie_args(), url])
         data = json.loads(result.stdout or "{}")
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         return fallback
@@ -245,6 +247,7 @@ def download_visual_discovery(url, workdir, runner=None):
         run([
             sys.executable, "-m", "yt_dlp",
             "-f", "worst[height<=360]/worst", "--no-playlist",
+            *colab_utils.yt_dlp_cookie_args(),
             "-o", str(workdir / "discovery.%(ext)s"), url])
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(
@@ -268,7 +271,8 @@ def download_discovery(url, workdir, meta=None, runner=None):
         try:
             run([
                 sys.executable, "-m", "yt_dlp", "-f", "bestaudio/best",
-                "--no-playlist", "-o", str(workdir / "audio.%(ext)s"), url])
+                "--no-playlist", *colab_utils.yt_dlp_cookie_args(),
+                "-o", str(workdir / "audio.%(ext)s"), url])
         except (OSError, subprocess.SubprocessError):
             pass
         audio = _find_media(workdir, "audio")
@@ -283,7 +287,8 @@ def _download(url, out_path, fmt, runner=None, timeout=None, extra=()):
     run = runner or _run
     cmd = [sys.executable, "-m", "yt_dlp", "-f", fmt,
            "--merge-output-format", "mp4", "--no-playlist",
-           "--force-overwrites", *extra, "-o", str(out_path), url]
+           "--force-overwrites", *colab_utils.yt_dlp_cookie_args(),
+           *extra, "-o", str(out_path), url]
     try:
         if runner is None:
             run(cmd, timeout=timeout)

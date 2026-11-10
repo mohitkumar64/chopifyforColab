@@ -11,8 +11,6 @@ from pathlib import Path
 import subprocess
 import zipfile
 
-import numpy as np
-
 EVIDENCE_VERSION = 1
 FEATURE_VERSION = 1
 SAMPLE_RATE = 16000
@@ -22,10 +20,16 @@ READ_BYTES = 1 << 20
 AUDIO_CACHE = "audio_features.npz"
 SILENCE_DB = -80.0
 
-# A raised cosine window keeps spectral flux stable across frame boundaries.
-_WINDOW = np.hanning(FRAME_SAMPLES).astype(np.float32)
-_FREQUENCIES = np.fft.rfftfreq(FRAME_SAMPLES, 1.0 / SAMPLE_RATE)
-_HIGH_BAND = _FREQUENCIES >= 4000.0
+try:
+    import numpy as np
+    _WINDOW = np.hanning(FRAME_SAMPLES).astype(np.float32)
+    _FREQUENCIES = np.fft.rfftfreq(FRAME_SAMPLES, 1.0 / SAMPLE_RATE)
+    _HIGH_BAND = _FREQUENCIES >= 4000.0
+except ImportError:
+    np = None
+    _WINDOW = None
+    _FREQUENCIES = None
+    _HIGH_BAND = None
 
 
 def clamp(value, low=0.0, high=1.0):

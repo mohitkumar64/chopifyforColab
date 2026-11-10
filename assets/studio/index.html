@@ -26,16 +26,20 @@
       <nav id="projects" aria-label="Saved projects">
         <p class="muted">No projects yet.</p>
       </nav>
+      <button id="open-api-modal-rail" type="button" class="rail-api-btn">🔑 LLM & API Settings</button>
       <div class="rail-footer">
         Your footage. Your machine.<br /><span
-          >Whisper · ffmpeg · optional Ollama</span
+          >Whisper · ffmpeg · Gemini · NVIDIA · Ollama</span
         >
       </div>
     </aside>
     <main>
       <header class="topbar">
         <span>THE LOCAL CUTTING ROOM</span
-        ><span id="connection"><span class="dot"></span> Local session</span>
+        ><div class="topbar-right">
+          <button id="open-api-modal" type="button" class="topbar-btn">🔑 LLM / API Keys</button>
+          <span id="connection"><span class="dot"></span> Active session</span>
+        </div>
       </header>
       <div id="notice" role="status" aria-live="polite" hidden></div>
       <section id="new-view" class="view">
@@ -47,6 +51,22 @@
             export.
           </p>
         </div>
+        <div class="panel colab-panel" id="colab-videos-panel">
+          <div class="panel-title">
+            <h2>📁 Videos in <code id="videos-dir-label">/content/videos</code></h2>
+            <div class="panel-actions">
+              <span id="colab-cookies-badge" class="cookies-badge" title="Click to manage cookies.txt">🍪 Cookies: checking...</span>
+              <button type="button" id="refresh-available-videos" class="icon-refresh-btn" title="Refresh video list">🔄 Refresh</button>
+            </div>
+          </div>
+          <p class="hint">
+            Downloaded YouTube videos are saved here with 1-2-3 non-colliding names. Click <b>Copy Path</b> to copy the exact Colab path, or <b>＋ Add</b> to insert directly into project sources below.
+          </p>
+          <div id="available-videos-container" class="available-videos-list">
+            <p class="muted">Scanning for videos...</p>
+          </div>
+        </div>
+
         <form id="create-form" class="panel input-panel">
           <div class="panel-title">
             <h2>Start with your footage</h2>
@@ -354,9 +374,19 @@
                     <option>auto</option>
                   </select></label
                 ><label
-                  >Local scoring model (optional)<input
+                  >LLM Provider<select name="llm_provider" id="setting-llm-provider">
+                    <option value="">Auto (use .env default)</option>
+                    <option value="gemini">Gemini API (Google GenAI)</option>
+                    <option value="nvidia">NVIDIA NIM API</option>
+                    <option value="ollama">Ollama (Local)</option>
+                    <option value="heuristic">Heuristic only (No LLM)</option>
+                  </select></label
+                ><label
+                  >LLM Model override (optional)<input
                     name="llm"
-                    placeholder="qwen2.5:7b" /></label
+                    id="setting-llm-model"
+                    placeholder="e.g. gemini-3.8-flash, meta/llama-3.3-70b-instruct" /></label
+                ><button type="button" id="open-api-modal-settings" class="small-btn">Configure API Keys (.env)</button
                 ><label
                   >Minimum score<input
                     name="min_score"
@@ -627,5 +657,124 @@
         CHOPIFY <span>Open source. No upload. No watermark.</span>
       </footer>
     </main>
+
+    <div id="api-modal" class="modal-backdrop" hidden>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2>LLM Providers & API Keys</h2>
+          <button type="button" id="close-api-modal" class="icon-close" aria-label="Close modal">&times;</button>
+        </div>
+        <p class="hint">
+          Configure Gemini API, NVIDIA NIM, and Ollama for viral clip reranking. Heuristic selection is always retained as a fallback if an API is unavailable. Saved directly to <code>.env</code>.
+        </p>
+        <form id="api-keys-form">
+          <label
+            >Active LLM Provider<select id="modal-llm-provider" name="llm_provider">
+              <option value="gemini">Gemini API (Google GenAI)</option>
+              <option value="nvidia">NVIDIA NIM API</option>
+              <option value="ollama">Ollama (Local)</option>
+              <option value="heuristic">Heuristic only (No LLM)</option>
+            </select></label
+          >
+
+          <fieldset class="api-fieldset">
+            <legend>🍪 YouTube Cookies (cookies.txt for Colab)</legend>
+            <p class="hint" style="margin-top:0;">
+              Google Colab IPs frequently get blocked by YouTube with 403 or bot challenges. Export your YouTube cookies as a Netscape <code>cookies.txt</code> and upload or paste them here. Saved directly to root/Colab.
+            </p>
+            <div class="cookies-upload-row">
+              <input type="file" id="modal-cookies-file" accept=".txt" />
+              <button type="button" id="btn-upload-cookies" class="small-btn">Upload cookies.txt</button>
+            </div>
+            <div class="key-status-row" id="cookies-status-indicator">Checking cookies.txt status...</div>
+            <details class="paste-cookies-details">
+              <summary>Or paste cookies.txt content</summary>
+              <textarea id="modal-cookies-text" rows="4" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com..."></textarea>
+              <button type="button" id="btn-save-cookies-text" class="small-btn">Save Pasted Cookies</button>
+            </details>
+          </fieldset>
+
+          <fieldset class="api-fieldset">
+            <legend>Google Gemini API</legend>
+            <label
+              >Gemini API Key
+              <div class="input-wrap">
+                <input
+                  type="password"
+                  id="modal-gemini-key"
+                  name="gemini_api_key"
+                  placeholder="AIzaSy... (leave blank to keep current)"
+                  autocomplete="off"
+                />
+                <button type="button" class="btn-toggle-vis" data-target="modal-gemini-key">👁️</button>
+              </div>
+            </label>
+            <div class="key-status-row" id="gemini-key-status"></div>
+            <label
+              >Gemini Model<input
+                type="text"
+                id="modal-gemini-model"
+                name="gemini_model"
+                placeholder="gemini-3.8-flash"
+            /></label>
+          </fieldset>
+
+          <fieldset class="api-fieldset">
+            <legend>NVIDIA NIM API</legend>
+            <label
+              >NVIDIA API Key
+              <div class="input-wrap">
+                <input
+                  type="password"
+                  id="modal-nvidia-key"
+                  name="nvidia_api_key"
+                  placeholder="nvapi-... (leave blank to keep current)"
+                  autocomplete="off"
+                />
+                <button type="button" class="btn-toggle-vis" data-target="modal-nvidia-key">👁️</button>
+              </div>
+            </label>
+            <div class="key-status-row" id="nvidia-key-status"></div>
+            <label
+              >NVIDIA Base URL<input
+                type="text"
+                id="modal-nvidia-url"
+                name="nvidia_base_url"
+                placeholder="https://integrate.api.nvidia.com/v1"
+            /></label>
+            <label
+              >NVIDIA Model<input
+                type="text"
+                id="modal-nvidia-model"
+                name="nvidia_model"
+                placeholder="meta/llama-3.3-70b-instruct"
+            /></label>
+          </fieldset>
+
+          <fieldset class="api-fieldset">
+            <legend>Local Ollama</legend>
+            <label
+              >Ollama Host<input
+                type="text"
+                id="modal-ollama-host"
+                name="ollama_host"
+                placeholder="http://localhost:11434"
+            /></label>
+            <label
+              >Ollama Model<input
+                type="text"
+                id="modal-ollama-model"
+                name="ollama_model"
+                placeholder="qwen2.5:7b"
+            /></label>
+          </fieldset>
+
+          <div class="modal-footer">
+            <button type="button" id="cancel-api-modal">Cancel</button>
+            <button type="submit" class="primary">Save API Settings to .env</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </body>
 </html>

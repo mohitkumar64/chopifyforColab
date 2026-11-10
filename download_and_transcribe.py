@@ -17,6 +17,8 @@ import shutil
 from urllib.parse import urlparse
 from pathlib import Path
 
+import colab_utils
+
 TRANSCRIPT_VERSION = 2
 CHUNK_SECONDS = 1800
 OVERLAP_SECONDS = 30
@@ -40,29 +42,44 @@ def resolve_source(source, workdir):
 
 
 def download(url, workdir):
+    workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    # A fresh directory prevents a changed URL from reusing an old source.mp4.
+    videos_dir = colab_utils.get_videos_dir()
     with tempfile.TemporaryDirectory(prefix="download-", dir=workdir) as temp:
         video = _download(url, Path(temp))
-        destination = workdir / video.name
+        # Always save downloaded videos to /content/videos with a 1-2-3 numbering clause
+        destination = colab_utils.unique_video_path(videos_dir, video.name)
         shutil.move(str(video), str(destination))
+        workdir_target = workdir / destination.name
+        if not workdir_target.exists():
+            try:
+                workdir_target.symlink_to(destination)
+            except OSError:
+                try:
+                    shutil.copy2(str(destination), str(workdir_target))
+                except OSError:
+                    pass
         return destination.resolve()
 
 
 def _download(url, workdir):
-    out_tmpl = workdir / "source.%(ext)s"
+    out_tmpl = workdir / "%(title).150B.%(ext)s"
     # Highest quality: best video + best audio, merged to mp4 (needs ffmpeg on PATH).
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "-f", "bestvideo*+bestaudio/best",
         "--merge-output-format", "mp4",
         "--no-playlist",
+        *colab_utils.yt_dlp_cookie_args(),
         "-o", str(out_tmpl),
         url,
     ]
     run(cmd)
-    vids = [p for p in sorted(workdir.glob("source.*"))
+    vids = [p for p in sorted(workdir.glob("*.*"))
             if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov", ".m4v")]
+    if not vids:
+        vids = [p for p in sorted(workdir.glob("source.*"))
+                if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov", ".m4v")]
     if not vids:
         raise SystemExit("Download failed: no video file produced.")
     return vids[0].resolve()
