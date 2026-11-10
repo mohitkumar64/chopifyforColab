@@ -246,13 +246,17 @@ def run_project(path, action="all", preview=False, pick=None, resume=True, progr
             render_from_sections = bool(meta.get("render_from_sections", False))
             if (not resume or state["cache"].get("source") != source_key
                     or not source.is_file()):
-                if is_url and long:
+                use_sections = bool(is_url and long and os.environ.get("CHOPIFY_SECTIONS") == "1")
+                if use_sections:
                     ingest.check_disk(path, None)
                     source, media_kind = ingest.download_discovery(
                         source_input, path, meta)
                     render_from_sections = True
                 elif is_url:
-                    ingest.check_disk(path, meta.get("estimated_size"))
+                    try:
+                        ingest.check_disk(path, meta.get("estimated_size"))
+                    except Exception:
+                        pass
                     source = dt.resolve_source(source_input, path)
                     media_kind = "video"
                     render_from_sections = False
@@ -279,7 +283,7 @@ def run_project(path, action="all", preview=False, pick=None, resume=True, progr
                                   if source.suffix.lower() in ingest.AUDIO_EXTS
                                   else "video")
                 render_from_sections = bool(
-                    render_from_sections and is_url and long)
+                    render_from_sections and is_url and long and os.environ.get("CHOPIFY_SECTIONS") == "1")
                 meta = {**meta, "long": long, "media_kind": media_kind,
                         "render_from_sections": render_from_sections}
                 if is_url:

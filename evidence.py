@@ -4,6 +4,7 @@ The timeline is one value per second of mono 16 kHz audio. It is built once per
 source, cached as ``audio_features.npz``, and reused for every candidate. Nothing
 here leaves the machine or calls a network service.
 """
+from __future__ import annotations
 from dataclasses import dataclass
 import json
 import math

@@ -15,6 +15,7 @@ ffmpeg, no libx264 encoder, missing Python packages) with human-readable fix
 hints - because installability is where users bail.
 """
 import re
+import os
 import sys
 import math
 import shutil
@@ -108,7 +109,7 @@ def prompt_scoring(options, defaults=None, interactive=True,
         while True:
             try:
                 answer = input("Minimum clip score (0-10, Enter = 8.0): ")
-            except EOFError:
+            except (EOFError, OSError):
                 result["min_score"] = score_default
                 break
             text = answer.strip()
@@ -131,7 +132,7 @@ def prompt_scoring(options, defaults=None, interactive=True,
             try:
                 answer = input("Preferred clip length (e.g. 45s, 2m; "
                                "Enter = AI chooses): ")
-            except EOFError:
+            except (EOFError, OSError):
                 result["preferred_len"] = length_default
                 break
             text = answer.strip()
@@ -314,7 +315,7 @@ def main():
             elif env_prov == "ollama":
                 options["llm"] = "qwen2.5:7b"
     interactive = (
-        not args.no_input and not args.batch and args.action != "render"
+        not args.no_input and not args.batch and not args.project and args.action != "render"
         and not args.search and not args.semantic and sys.stdin.isatty()
     )
     ask_score = not flag_given("--min-score")
@@ -374,11 +375,11 @@ def main():
                       f"(for example {max(0.0, score - 0.5):.1f}) or run "
                       f"--action prepare to review the range.", flush=True)
                 raise SystemExit(1)
-            if passing > 10:
+            if passing > 10 and interactive and not args.no_input:
                 try:
                     answer = input(f"{passing} clips at {score:.1f} or above. "
                                    f"Render all? [Y/n] ")
-                except EOFError:
+                except (EOFError, OSError):
                     answer = ""
                 if answer.strip().lower() in {"n", "no"}:
                     print(f"Run: python chopify.py --project {path} "

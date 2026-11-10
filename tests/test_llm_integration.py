@@ -1,6 +1,7 @@
 """Comprehensive unit and integration tests for LLM providers, Cloudflare Tunnel, and Dashboard host check."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -432,6 +433,35 @@ class TestScoreClipsLLMIntegration(unittest.TestCase):
             segments, mode = score_clips.select(self.workdir, min_score=0.0, llm_provider="gemini")
             self.assertEqual(mode, "heuristic")
             self.assertAlmostEqual(segments[0]["overall"], 7.0)
+
+
+class TestNoInputAndDashboardSubprocess(unittest.TestCase):
+    def test_dashboard_run_cmd_includes_no_input(self):
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.wait.return_value = 0
+            mock_popen.return_value = mock_proc
+
+            with tempfile.TemporaryDirectory() as td:
+                pdir = Path(td) / "test_proj"
+                pdir.mkdir(parents=True)
+                (pdir / "project.json").write_text(json.dumps({"id": "test_proj", "source": "video.mp4"}))
+
+                app = dashboard.Studio(Path(td))
+                app._run(pdir, "prepare", preview=False, pick=None)
+
+                self.assertTrue(mock_popen.called)
+                args, kwargs = mock_popen.call_args
+                cmd = args[0]
+                self.assertIn("--no-input", cmd)
+                self.assertEqual(kwargs.get("stdin"), subprocess.DEVNULL)
+                app.close()
+
+    def test_chopify_prompt_scoring_respects_interactive_false(self):
+        import chopify
+        with patch("builtins.input", side_effect=AssertionError("input() must not be called!")):
+            opts = chopify.prompt_scoring({"min_score": 8.0}, interactive=False)
+            self.assertEqual(opts["min_score"], 8.0)
 
 
 if __name__ == "__main__":

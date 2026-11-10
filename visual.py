@@ -5,6 +5,7 @@ scene/UI change, face presence, and face motion with OpenCV. Nothing here leaves
 the machine. Candidate ranges are analyzed only after the audio shortlist, and
 results are cached by source identity and range.
 """
+from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
