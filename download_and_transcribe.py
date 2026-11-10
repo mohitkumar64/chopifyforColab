@@ -132,11 +132,29 @@ def _atomic_json(path, data):
     os.replace(temp, path)
 
 
+def resolve_device_and_compute(device, compute_type=None):
+    """Resolve (device, compute_type): if GPU provided use cuda/float16 else cpu/int8."""
+    resolved_device = device
+    if not resolved_device or resolved_device == "auto":
+        resolved_device = colab_utils.detect_device()
+    resolved_compute = compute_type
+    if not resolved_compute or resolved_compute == "default":
+        resolved_compute = "float16" if resolved_device == "cuda" else "int8"
+    return resolved_device, resolved_compute
+
+
 def _load_model(model_size, device, compute_type):
     from faster_whisper import WhisperModel
-    print(f"Loading faster-whisper model={model_size} device={device} "
-          f"compute={compute_type} (first run downloads the model)...", flush=True)
-    return WhisperModel(model_size, device=device, compute_type=compute_type)
+    dev, comp = resolve_device_and_compute(device, compute_type)
+    print(f"Loading faster-whisper model={model_size} device={dev} "
+          f"compute={comp} (first run downloads the model)...", flush=True)
+    try:
+        return WhisperModel(model_size, device=dev, compute_type=comp)
+    except Exception as exc:
+        if dev == "cuda":
+            print(f"CUDA initialization failed ({exc}). Falling back to CPU int8...", flush=True)
+            return WhisperModel(model_size, device="cpu", compute_type="int8")
+        raise
 
 
 def _transcribe_media(model, media, offset=0.0):
@@ -369,8 +387,8 @@ def main():
     ap.add_argument("--workdir", default="work")
     ap.add_argument("--model", default="medium",
                     help="faster-whisper model: tiny/base/small/medium/large-v3")
-    ap.add_argument("--device", default="cpu")
-    ap.add_argument("--compute-type", default="int8")
+    ap.add_argument("--device", default="auto")
+    ap.add_argument("--compute-type", default=None)
     args = ap.parse_args()
 
     workdir = Path(args.workdir)

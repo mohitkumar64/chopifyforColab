@@ -464,5 +464,52 @@ class TestNoInputAndDashboardSubprocess(unittest.TestCase):
             self.assertEqual(opts["min_score"], 8.0)
 
 
+class TestAutoDeviceAndAction(unittest.TestCase):
+    def test_default_options_device_is_auto(self):
+        import projects
+        self.assertEqual(projects.DEFAULT_OPTIONS["device"], "auto")
+
+    def test_detect_device_with_cuda(self):
+        mock_torch = MagicMock()
+        mock_torch.cuda.is_available.return_value = True
+        with patch.dict(sys.modules, {"torch": mock_torch}):
+            dev = colab_utils.detect_device()
+            self.assertEqual(dev, "cuda")
+
+    def test_detect_device_fallback_cpu(self):
+        with patch.dict(sys.modules, {"torch": None, "ctranslate2": None}), \
+             patch("shutil.which", return_value=None):
+            dev = colab_utils.detect_device()
+            self.assertEqual(dev, "cpu")
+
+    def test_resolve_device_and_compute(self):
+        import download_and_transcribe as dt
+        # When device="auto" and GPU detected
+        with patch.object(colab_utils, "detect_device", return_value="cuda"):
+            dev, comp = dt.resolve_device_and_compute("auto", "default")
+            self.assertEqual(dev, "cuda")
+            self.assertEqual(comp, "float16")
+
+        # When device="auto" and CPU detected
+        with patch.object(colab_utils, "detect_device", return_value="cpu"):
+            dev, comp = dt.resolve_device_and_compute("auto", "default")
+            self.assertEqual(dev, "cpu")
+            self.assertEqual(comp, "int8")
+
+    def test_batch_action_defaults_to_all(self):
+        with tempfile.TemporaryDirectory() as td:
+            app = dashboard.Studio(Path(td))
+            with patch.object(app, "enqueue") as mock_enqueue:
+                # Call batch creation
+                import projects
+                sources = ["video1.mp4", "video2.mp4"]
+                for s in sources:
+                    st = projects.create_project(app.root, s, {})
+                    app.enqueue(st["id"], "all")
+                self.assertEqual(mock_enqueue.call_count, 2)
+                self.assertEqual(mock_enqueue.call_args_list[0][0][1], "all")
+            app.close()
+
+
 if __name__ == "__main__":
     unittest.main()

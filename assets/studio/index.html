@@ -369,9 +369,9 @@
                   </select></label
                 ><label
                   >Compute<select name="device">
-                    <option>cpu</option>
-                    <option>cuda</option>
-                    <option>auto</option>
+                    <option value="auto">auto (GPU if available, else CPU)</option>
+                    <option value="cuda">cuda (GPU)</option>
+                    <option value="cpu">cpu</option>
                   </select></label
                 ><label
                   >LLM Provider<select name="llm_provider" id="setting-llm-provider">

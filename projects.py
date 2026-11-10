@@ -18,7 +18,7 @@ import branding
 from captions import update_transcript
 
 DEFAULT_OPTIONS = {"aspect": "16:9", "style": "default", "tighten": False,
-                   "loudnorm": False, "whisper_model": "medium", "device": "cpu",
+                   "loudnorm": False, "whisper_model": "medium", "device": "auto",
                    "min_len": 15, "max_len": 300, "max_clips": None,
                    "min_score": 8.0, "preferred_len": None,
                    "llm": None, "llm_provider": None, "search": None, "semantic": None,

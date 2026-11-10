@@ -332,7 +332,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = []
                     for source in sources:
                         state = projects.create_project(self.app.root, source, options)
-                        self.app.enqueue(state["id"], "prepare")
+                        self.app.enqueue(state["id"], body.get("action", "all"))
                         result.append(state)
                     return self.send_json({"projects": result}, 201)
                 if parts == ["api", "brands"]:

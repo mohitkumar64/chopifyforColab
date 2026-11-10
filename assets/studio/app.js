@@ -724,7 +724,7 @@ $("#create-form").addEventListener(
       const result = await api("/api/batch", { sources, options });
       await selectProject(result.projects[0].id);
       notice(
-        `${sources.length} project${sources.length === 1 ? "" : "s"} queued for review.`,
+        `${sources.length} project${sources.length === 1 ? "" : "s"} queued for auto processing.`,
       );
       $("#sources").value = "";
     } finally {

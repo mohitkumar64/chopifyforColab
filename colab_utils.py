@@ -1,9 +1,37 @@
-"""Colab utilities: cookies.txt management, /content/videos storage with 1-2-3 numbering, and video discovery."""
+"""Colab utilities: cookies.txt management, /content/videos storage with 1-2-3 numbering, video discovery, and GPU detection."""
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi"}
+
+
+def detect_device():
+    """Detect if GPU is available (via torch, ctranslate2, or nvidia-smi); returns 'cuda' if GPU is provided, else 'cpu'."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        pass
+
+    try:
+        if shutil.which("nvidia-smi"):
+            res = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode == 0:
+                return "cuda"
+    except Exception:
+        pass
+
+    return "cpu"
 
 
 def find_cookies_path():
